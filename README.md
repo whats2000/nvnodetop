@@ -1,6 +1,6 @@
 # Nvidia Node Cluster Top (nvnodetop)
 
-![nvnodetop](assets/nvnodetop.png)
+![nvnodetop](images/nvnodetop.png)
 
 ## License
 
