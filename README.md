@@ -2,8 +2,8 @@
 
 <div align="center">
 
-[![PyPI version](https://badge.fury.io/py/nvnodetop.svg)](https://badge.fury.io/py/nvnodetop)
-[![Python Versions](https://img.shields.io/pypi/pyversions/nvnodetop)](https://pypi.org/project/nvnodetop/)
+[![PyPI version](https://badge.fury.io/py/nvnodetop.svg&cache-control=no-cache)](https://badge.fury.io/py/nvnodetop)
+[![Python Versions](https://img.shields.io/pypi/pyversions/nvnodetop&cache-control=no-cache)](https://pypi.org/project/nvnodetop/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI/CD](https://github.com/whats2000/nvnodetop/actions/workflows/publish.yml/badge.svg)](https://github.com/whats2000/nvnodetop/actions/workflows/publish.yml)
 
