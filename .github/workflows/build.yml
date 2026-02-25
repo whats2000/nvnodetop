@@ -1,0 +1,54 @@
+name: Build Wheel
+
+on:
+  workflow_dispatch: # manual trigger from the Actions tab
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "nvnodetop.sh"
+      - "nvnodetop/**"
+      - "pyproject.toml"
+
+jobs:
+  build:
+    name: Build & upload wheel
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install hatchling build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvnodetop-wheel
+          path: dist/*.whl
+          retention-days: 30
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvnodetop-sdist
+          path: dist/*.tar.gz
+          retention-days: 30
+
+      - name: Print install instruction
+        run: |
+          WHL=$(ls dist/*.whl)
+          echo "### Install instructions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download the \`nvnodetop-wheel\` artifact, then run:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "pip install $(basename $WHL)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
