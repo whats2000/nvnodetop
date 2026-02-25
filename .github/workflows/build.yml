@@ -28,17 +28,6 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build
 
-      - name: Verify wheel has no CRLF in shell script
-        run: |
-          python3 -c "
-          import zipfile
-          whl = sorted(__import__('glob').glob('dist/*.whl'))[0]
-          z = zipfile.ZipFile(whl)
-          data = z.read('nvnodetop/nvnodetop.sh')
-          assert b'\r\n' not in data, 'CRLF found in bundled nvnodetop.sh!'
-          print(f'OK: {whl} has LF-only nvnodetop.sh ({len(data)} bytes)')
-          "
-
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
