@@ -5,23 +5,22 @@ passing through any command-line arguments.
 
 from __future__ import annotations
 
-import os
 import importlib.resources
-import sys
+import os
 import stat
+import sys
 import tempfile
 
 
 def main() -> None:
     """Entry point for the ``nvnodetop`` console script."""
-    # Locate the bundled shell script
     try:
         # Python 3.9+: files() API
         ref = importlib.resources.files("nvnodetop").joinpath("nvnodetop.sh")
         with importlib.resources.as_file(ref) as script_path:
             _exec_script(script_path)
     except AttributeError:
-        # Python 3.8 fallback: pkg_resources / __file__-relative lookup
+        # Python 3.8 fallback
         here = os.path.dirname(__file__)
         script_path = os.path.join(here, "nvnodetop.sh")
         if not os.path.isfile(script_path):
@@ -33,7 +32,7 @@ def main() -> None:
 
 
 def _exec_script(script_path: "os.PathLike[str]") -> None:
-    """Make *script_path* executable if needed, then exec it (Unix only)."""
+    """Ensure the script has LF line endings, is executable, then exec it."""
     import platform
 
     if platform.system() == "Windows":
@@ -44,25 +43,38 @@ def _exec_script(script_path: "os.PathLike[str]") -> None:
 
     script = str(script_path)
 
-    # Ensure the script is executable; if the file is inside a zip/wheel it
-    # will have been extracted to a real path by as_file() / the fallback.
-    current_mode = os.stat(script).st_mode
-    if not (current_mode & stat.S_IXUSR):
-        try:
-            os.chmod(script, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        except OSError:
-            # Read-only install (e.g. system site-packages) — copy to a temp file
-            import shutil
+    # ── CRLF safety net ───────────────────────────────────────────────────────
+    # If the script was bundled from a Windows machine it may contain \r\n.
+    # Bash on Linux will fail with "$'\r': command not found" in that case.
+    # We write a clean LF-only copy to a temp file before exec'ing.
+    with open(script, "rb") as fh:
+        raw = fh.read()
 
-            tmp = tempfile.NamedTemporaryFile(
-                prefix="nvnodetop_", suffix=".sh", delete=False
-            )
-            tmp.close()
-            shutil.copy2(script, tmp.name)
-            os.chmod(tmp.name, 0o755)
-            script = tmp.name
+    if b"\r\n" in raw:
+        tmp = tempfile.NamedTemporaryFile(
+            prefix="nvnodetop_", suffix=".sh", delete=False
+        )
+        tmp.write(raw.replace(b"\r\n", b"\n"))
+        tmp.close()
+        os.chmod(tmp.name, 0o755)
+        script = tmp.name
+    else:
+        # Ensure executable bit is set (may be missing after pip install)
+        current_mode = os.stat(script).st_mode
+        if not (current_mode & stat.S_IXUSR):
+            try:
+                os.chmod(script, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            except OSError:
+                import shutil
+                tmp = tempfile.NamedTemporaryFile(
+                    prefix="nvnodetop_", suffix=".sh", delete=False
+                )
+                tmp.close()
+                shutil.copy2(script, tmp.name)
+                os.chmod(tmp.name, 0o755)
+                script = tmp.name
 
-    # Replace the current process with bash running the script
+    # Replace current process with bash — preserves TTY, signals, exit codes
     args = ["/bin/bash", script] + sys.argv[1:]
     os.execv("/bin/bash", args)
 
