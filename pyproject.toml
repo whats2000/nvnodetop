@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "nvnodetop"
-version = "0.1.0"
+version = "0.1.1"
 description = "nvtop-inspired real-time GPU monitor for SLURM HPC clusters"
 readme = "README.md"
 license = { file = "LICENSE" }
