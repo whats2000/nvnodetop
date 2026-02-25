@@ -9,3 +9,20 @@ Dependencies.toml
 Config.toml
 # the config files used for testing, Uncomment the following line if you want to commit the test config files
 #!**/tests/Config.toml
+
+# Python packaging artifacts
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor / OS
+.DS_Store
+*.swp

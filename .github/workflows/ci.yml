@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+
+jobs:
+  lint:
+    name: Lint & syntax check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check Bash syntax
+        run: bash -n nvnodetop.sh
+
+      - name: Shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "."
+          additional_files: "nvnodetop.sh"
+          severity: warning
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build twine
+
+      - name: Build package
+        run: python -m build
+
+      - name: Check distribution metadata
+        run: twine check dist/*
