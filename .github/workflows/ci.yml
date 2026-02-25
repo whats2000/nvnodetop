@@ -22,7 +22,6 @@ jobs:
         uses: ludeeus/action-shellcheck@master
         with:
           scandir: "."
-          additional_files: "nvnodetop.sh"
           severity: warning
 
       - name: Set up Python
@@ -31,7 +30,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install build tools
-        run: pip install build twine
+        run: pip install hatchling build twine
 
       - name: Build package
         run: python -m build

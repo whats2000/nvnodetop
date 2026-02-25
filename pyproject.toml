@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "nvnodetop"
@@ -38,8 +38,19 @@ Changelog = "https://github.com/whats2000/nvnodetop/blob/main/CHANGELOG.md"
 [project.scripts]
 nvnodetop = "nvnodetop._launcher:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["nvnodetop"]
 
-[tool.setuptools.package-data]
-"nvnodetop" = ["nvnodetop.sh"]
+# Bundle the single root script into the installed package — no copy needed
+[tool.hatch.build.targets.wheel.force-include]
+"nvnodetop.sh" = "nvnodetop/nvnodetop.sh"
+
+# Ensure the script is also included in the source distribution
+[tool.hatch.build.targets.sdist]
+include = [
+    "nvnodetop/",
+    "nvnodetop.sh",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+]

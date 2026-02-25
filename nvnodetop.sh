@@ -320,8 +320,8 @@ render_node() {
     (( SHOW_PROCS )) && proc_hint="${BOLD}[p procs]${RESET}"
 
     printf "${DIM}  Job ${RESET}${BOLD}%-8s${RESET} ${DIM}%-18s${RESET}" "$jid" "$jname"
-    printf "  ${DIM}job [%d/%d] ↑↓jobs  node [%d/%d] <>nodes  %b  q quit  poll:%ss disp:%ss${RESET}\n" \
-           "$job_cur" "$job_total" "$node_cur" "$node_total" "$proc_hint" "$FETCH_INTERVAL" "$DISPLAY_INTERVAL"
+    printf "  ${DIM}job [%d/%d] ↑↓jobs  node [%d/%d] <>nodes  %b  q quit  poll:%ss disp:%ss  %s${RESET}\n" \
+           "$job_cur" "$job_total" "$node_cur" "$node_total" "$proc_hint" "$FETCH_INTERVAL" "$DISPLAY_INTERVAL" "$now"
     printf "${BOLD}${CYAN}  %-30s${RESET}%b\n" "$node" "$age_label"
     printf "${DIM}%s${RESET}\n" "$(printf '─%.0s' $(seq 1 78))"
 
@@ -369,7 +369,7 @@ while true; do
         jname="${JOB_NAMES[$jid]}"
 
         mapfile -t cur_nodes <<< "${JOB_NODES[$jid]}"
-        cur_nodes=($(printf '%s\n' "${cur_nodes[@]}" | grep -v '^[[:space:]]*$'))
+        mapfile -t cur_nodes < <(printf '%s\n' "${cur_nodes[@]}" | grep -v '^[[:space:]]*$')
         ncount=${#cur_nodes[@]}
 
         nidx=${JOB_NODE_IDX[$jid]:-0}
@@ -395,7 +395,7 @@ while true; do
             if (( njobs > 0 )); then
                 jid="${JOB_IDS[$job_idx]}"
                 mapfile -t _nn <<< "${JOB_NODES[$jid]}"
-                _nn=($(printf '%s\n' "${_nn[@]}" | grep -v '^[[:space:]]*$'))
+                mapfile -t _nn < <(printf '%s\n' "${_nn[@]}" | grep -v '^[[:space:]]*$')
                 nc=${#_nn[@]}
                 JOB_NODE_IDX[$jid]=$(( (${JOB_NODE_IDX[$jid]:-0} + 1) % nc ))
             fi ;;
@@ -403,7 +403,7 @@ while true; do
             if (( njobs > 0 )); then
                 jid="${JOB_IDS[$job_idx]}"
                 mapfile -t _nn <<< "${JOB_NODES[$jid]}"
-                _nn=($(printf '%s\n' "${_nn[@]}" | grep -v '^[[:space:]]*$'))
+                mapfile -t _nn < <(printf '%s\n' "${_nn[@]}" | grep -v '^[[:space:]]*$')
                 nc=${#_nn[@]}
                 JOB_NODE_IDX[$jid]=$(( (${JOB_NODE_IDX[$jid]:-0} - 1 + nc) % nc ))
             fi ;;
