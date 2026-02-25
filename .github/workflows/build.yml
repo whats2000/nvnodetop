@@ -1,13 +1,9 @@
 name: Build Wheel
 
 on:
-  workflow_dispatch: # manual trigger from the Actions tab
+  workflow_dispatch:
   push:
     branches: ["main", "master"]
-    paths:
-      - "nvnodetop.sh"
-      - "nvnodetop/**"
-      - "pyproject.toml"
 
 jobs:
   build:
