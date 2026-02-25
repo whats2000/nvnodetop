@@ -10,7 +10,7 @@
 **An `nvtop`-inspired, real-time GPU monitor for SLURM HPC clusters.**  
 Monitor every GPU across all your running jobs — with utilisation bars, sparkline history, power draw, ECC errors and per-process detail — all from a single terminal window.
 
-![nvnodetop screenshot](images/nvnodetop.png)
+![nvnodetop screenshot](https://raw.githubusercontent.com/whats2000/nvnodetop/refs/heads/main/images/nvnodetop.png)
 
 </div>
 
