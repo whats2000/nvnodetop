@@ -52,7 +52,6 @@ draw_bar() {
 #   cols      - current terminal width
 get_layout() {
     local cols; cols=$(tput cols 2>/dev/null || echo 120)
-    local rows; rows=$(tput lines 2>/dev/null || echo 24)
     local fixed=80
     local avail=$(( cols - fixed ))
     (( avail < 16 )) && avail=16   # sanity floor for very narrow terminals
