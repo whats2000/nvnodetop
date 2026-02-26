@@ -42,15 +42,44 @@ draw_bar() {
     printf '%s' "$RESET"
 }
 
-# Compute bar width dynamically from terminal columns
-#   Layout per row (non-bar chars): ~74 fixed + 2 bars
-get_bar_width() {
+# Compute layout from terminal columns.
+# Fixed visible chars per data row (excl. 2 bars and sparkline):
+#   prefix(34) + after-bar1(7) + after-bar2(16) + power(10) + clocks(11) + after-spark(2) = 80
+#   memory segment uses %6d/%-6d to handle >=6-digit MiB (e.g. H200 143771 MiB)
+# Outputs three space-separated values: "bw spark_len cols"
+#   bw        - width of each progress bar  (8-24)
+#   spark_len - chars for sparkline column  (0 = hidden)
+#   cols      - current terminal width
+get_layout() {
     local cols; cols=$(tput cols 2>/dev/null || echo 120)
-    local avail=$(( (cols - 74) / 2 ))
-    (( avail < 8  )) && avail=8
-    (( avail > 24 )) && avail=24
-    printf '%s' "$avail"
+    local rows; rows=$(tput lines 2>/dev/null || echo 24)
+    local fixed=80
+    local avail=$(( cols - fixed ))
+    (( avail < 16 )) && avail=16   # sanity floor for very narrow terminals
+
+    # Bars get priority; sparkline takes whatever is left, up to HISTORY_LEN
+    local spark_len=$(( avail - 2 * 8 ))   # leftover after minimum bar allocation
+    (( spark_len > HISTORY_LEN )) && spark_len=$HISTORY_LEN
+
+    # Hide the Util History column entirely when the terminal is too narrow
+    if (( spark_len < 6 )); then
+        spark_len=0
+    fi
+
+    local bw
+    if (( spark_len > 0 )); then
+        bw=$(( (avail - spark_len) / 2 ))
+    else
+        bw=$(( avail / 2 ))
+    fi
+    (( bw < 8  )) && bw=8
+    (( bw > 24 )) && bw=24
+
+    printf '%s %s %s' "$bw" "$spark_len" "$cols"
 }
+
+get_bar_width() { local l; l=$(get_layout); printf '%s' "${l%% *}"; }
+get_spark_len() { local l; l=$(get_layout); local r=${l#* }; printf '%s' "${r%% *}"; }
 
 trim() { local v="$1"; v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"; printf '%s' "$v"; }
 
@@ -84,13 +113,19 @@ update_history() {
 }
 
 render_sparkline() {
-    local node=$1 idx=$2
+    local node=$1 idx=$2 max_len=${3:-$HISTORY_LEN}
     local hf; hf=$(hist_file "$node" "$idx")
     if [[ ! -f "$hf" ]]; then
+        # Print placeholder and pad the rest of the column with spaces
         printf '%s' "${DIM}··${RESET}"
+        (( max_len > 2 )) && printf '%*s' $(( max_len - 2 )) ''
         return
     fi
     local -a vals; read -ra vals < "$hf"
+    # Trim to the most-recent max_len samples for display
+    local vlen=${#vals[@]}
+    (( vlen > max_len )) && vals=("${vals[@]:$(( vlen - max_len ))}")
+    local printed=${#vals[@]}
     local out=''
     for v in "${vals[@]}"; do
         local lvl=$(( v * 7 / 100 ))
@@ -99,6 +134,8 @@ render_sparkline() {
         out+="${c}${SPARK[$lvl]}${RESET}"
     done
     printf '%b' "$out"
+    # Pad remaining space so columns after the sparkline always align
+    (( printed < max_len )) && printf '%*s' $(( max_len - printed )) ''
 }
 
 # ── SLURM ─────────────────────────────────────────────────────────────────────
@@ -196,17 +233,29 @@ SHOW_PROCS=0
 # ── Rendering ─────────────────────────────────────────────────────────────────
 render_gpu_section() {
     local raw_gpu=$1 node=$2
-    local bw; bw=$(get_bar_width)
+    local layout; layout=$(get_layout)
+    local bw=${layout%% *} rest=${layout#* }
+    local spark_len=${rest%% *} cols=${rest##* }
+    local sep_width=$(( cols - 2 ))
+    (( sep_width < 20 )) && sep_width=20
 
     if [[ -z "$raw_gpu" ]]; then
         printf "  ${DIM}Waiting for first data…${RESET}\n\n"
-        printf "  ${DIM}%-${HISTORY_LEN}s${RESET}\n" "(no summary yet)"
         return
     fi
 
-    # Column header
-    printf "  ${BOLD}%-3s  %-18s  %5s  %-${bw}s %-4s  %-${bw}s %-12s  %-9s  %-10s  %-${HISTORY_LEN}s  %s${RESET}\n" \
-           "GPU" "Name" "Temp" "Utilization" "%" "Memory" "Used/Tot MiB" "Power" "SM/MemMHz" "Util History" "Flags"
+    # Column header — Util History column is hidden when spark_len == 0
+    # "Flags" is a trailing overflow column; print it only when cols has room (>= 7 spare chars)
+    local spare=$(( cols - 80 - 2 * bw - spark_len ))
+    local flags_hdr=''
+    (( spare >= 7 )) && flags_hdr="  ${BOLD}Flags${RESET}"
+    if (( spark_len > 0 )); then
+        printf "  ${BOLD}%-3s  %-18s  %5s  %-${bw}s %-4s  %-${bw}s %-13s  %-8s  %-9s  %-${spark_len}s${RESET}%b\n" \
+               "GPU" "Name" "Temp" "Utilization" "%" "Memory" "Used/Tot MiB" "Power" "SM/MemMHz" "Util History" "$flags_hdr"
+    else
+        printf "  ${BOLD}%-3s  %-18s  %5s  %-${bw}s %-4s  %-${bw}s %-13s  %-8s  %-9s${RESET}%b\n" \
+               "GPU" "Name" "Temp" "Utilization" "%" "Memory" "Used/Tot MiB" "Power" "SM/MemMHz" "$flags_hdr"
+    fi
 
     # Accumulators for summary
     local sum_util=0 sum_mem_used=0 sum_mem_total=0
@@ -241,11 +290,15 @@ render_gpu_section() {
 
         printf "  ${BOLD}%3s${RESET}  %-18.18s  ${CYAN}%3s°C${RESET}  " "$idx" "$name" "$temp"
         draw_bar "$util" "$bw";    printf " ${uc}%3d%%${RESET}  " "$util"
-        draw_bar "$mem_pct" "$bw"; printf " ${mc}%5d${RESET}/%-5d  " "$mem_used" "$mem_total"
+        draw_bar "$mem_pct" "$bw"; printf " ${mc}%6d${RESET}/%-6d  " "$mem_used" "$mem_total"
         printf "${pc}%3d${RESET}/%-3dW  " "$pwr_draw" "$pwr_limit"
         printf "${DIM}%4d/%-4d${RESET}  " "$clk_sm" "$clk_mem"
-        render_sparkline "$node" "$idx"
-        printf "  %b\n" "$flags"
+        if (( spark_len > 0 )); then
+            render_sparkline "$node" "$idx" "$spark_len"
+            printf "  %b\n" "$flags"
+        else
+            printf "%b\n" "$flags"
+        fi
 
         # Accumulate for summary
         (( sum_util      += util      ))
@@ -267,7 +320,7 @@ render_gpu_section() {
         local uc mc pc
         uc=$(get_color "$avg_util"); mc=$(get_color "$total_mem_pct"); pc=$(get_color "$total_pwr_pct")
 
-        printf "  ${DIM}%s${RESET}\n" "$(printf '╌%.0s' $(seq 1 78))"
+        printf "  ${DIM}%s${RESET}\n" "$(printf '╌%.0s' $(seq 1 "$sep_width"))"
         printf "  ${DIM}SUM${RESET}  %-18s  ${DIM}%5s${RESET}  " "($gpu_count GPUs)" ""
         draw_bar "$avg_util" "$bw";       printf " ${uc}%3d%%${RESET}  " "$avg_util"
         draw_bar "$total_mem_pct" "$bw";  printf " ${mc}%5d${RESET}/%-5d  " "$sum_mem_used" "$sum_mem_total"
@@ -277,7 +330,10 @@ render_gpu_section() {
 
 render_proc_section() {
     local raw_procs=$1
-    printf "  ${DIM}%s${RESET}\n" "$(printf '·%.0s' $(seq 1 78))"
+    local cols; cols=$(tput cols 2>/dev/null || echo 120)
+    local sep_width=$(( cols - 2 ))
+    (( sep_width < 20 )) && sep_width=20
+    printf "  ${DIM}%s${RESET}\n" "$(printf '·%.0s' $(seq 1 "$sep_width"))"
     printf "  ${BOLD}%-3s  %-7s  %-12s  %-30s  %s${RESET}\n" \
            "GPU" "PID" "User" "Command" "GPU Mem MiB"
     if [[ -z "$raw_procs" ]]; then
@@ -322,8 +378,11 @@ render_node() {
     printf "${DIM}  Job ${RESET}${BOLD}%-8s${RESET} ${DIM}%-18s${RESET}" "$jid" "$jname"
     printf "  ${DIM}job [%d/%d] ↑↓jobs  node [%d/%d] <>nodes  %b  q quit  poll:%ss disp:%ss  %s${RESET}\n" \
            "$job_cur" "$job_total" "$node_cur" "$node_total" "$proc_hint" "$FETCH_INTERVAL" "$DISPLAY_INTERVAL" "$now"
+    local cols; cols=$(tput cols 2>/dev/null || echo 120)
+    local sep_width=$(( cols - 2 ))
+    (( sep_width < 20 )) && sep_width=20
     printf "${BOLD}${CYAN}  %-30s${RESET}%b\n" "$node" "$age_label"
-    printf "${DIM}%s${RESET}\n" "$(printf '─%.0s' $(seq 1 78))"
+    printf "${DIM}%s${RESET}\n" "$(printf '─%.0s' $(seq 1 "$sep_width"))"
 
     render_gpu_section "$raw_gpu" "$node"
     (( SHOW_PROCS )) && render_proc_section "$raw_procs"
@@ -338,6 +397,10 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 tput smcup; tput civis; stty -echo
+
+# ── Resize handling ──────────────────────────────────────────────────────────
+TERM_RESIZED=0
+trap 'TERM_RESIZED=1' WINCH
 
 read_key() {
     local k
@@ -358,6 +421,12 @@ while true; do
     (( now_ts - last_node_refresh >= NODE_REFRESH_INTERVAL )) && refresh_jobs
 
     njobs=${#JOB_IDS[@]}
+
+    # On terminal resize, do a full clear to eliminate stale content
+    if (( TERM_RESIZED )); then
+        tput clear
+        TERM_RESIZED=0
+    fi
 
     if (( njobs == 0 )); then
         tput cup 0 0
