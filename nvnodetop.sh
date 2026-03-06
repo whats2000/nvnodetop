@@ -229,7 +229,6 @@ stop_all_fetchers() {
 last_node_refresh=0
 SHOW_PROCS=0
 VIEW_MODE=0      # 0 = node detail, 1 = cluster overview
-PREV_VIEW_MODE=0 # detect mode switches → full clear to wipe stale line content
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
 render_gpu_section() {
@@ -330,8 +329,11 @@ render_gpu_section() {
 }
 
 # ── Overview: one SUM row per node + grand-total ──────────────────────────────
-# Reads the GPU-section summary accumulators from each cached node and prints
-# a compact table.  No per-GPU rows, no proc info — just totals.
+# Two-pass design:
+#   Pass 1 — read every node's cache file into parallel arrays and compute the
+#             maximum field widths needed (GPU count digits, MiB digits, Watt
+#             digits) so the column header always exactly matches the data.
+#   Pass 2 — render header + node rows + CLUSTER SUM using those widths.
 render_overview() {
     local jid=$1 jname=$2 job_cur=$3 job_total=$4
     local now; now=$(date '+%H:%M:%S')
@@ -340,29 +342,21 @@ render_overview() {
     (( sep_width < 20 )) && sep_width=20
 
     local layout; layout=$(get_layout)
-    local bw=${layout%% *} rest=${layout#* }
-    local spark_len=${rest%% *}
+    local bw=${layout%% *}
 
-    # Header line
-    local proc_hint="${DIM}p procs${RESET}"
-    (( SHOW_PROCS )) && proc_hint="${BOLD}[p procs]${RESET}"
+    # Status-bar header
     printf "${DIM}  Job ${RESET}${BOLD}%-8s${RESET} ${DIM}%-18s${RESET}" "$jid" "$jname"
-    printf "  ${DIM}job [%d/%d] ↑↓jobs  ${BOLD}[o overview]${RESET}${DIM}  q quit  poll:%ss disp:%ss  %s${RESET}\n" \
+    printf "  ${DIM}job [%d/%d] \u2191\u2193jobs  ${BOLD}[o overview]${RESET}${DIM}  q quit  poll:%ss disp:%ss  %s${RESET}\n" \
            "$job_cur" "$job_total" "$FETCH_INTERVAL" "$DISPLAY_INTERVAL" "$now"
-    printf "${BOLD}${CYAN}  %-30s${RESET}\n" "Cluster Overview — all nodes"
-    printf "${DIM}%s${RESET}\n" "$(printf '─%.0s' $(seq 1 "$sep_width"))"
-
-    # Column header
-    printf "  ${BOLD}%-22s  %-6s  %-${bw}s %-4s  %-${bw}s %-13s  %-8s${RESET}\n" \
-           "Node" "GPUs" "Utilization" "%" "Memory" "Used/Tot MiB" "Power"
-    printf "  ${DIM}%s${RESET}\n" "$(printf '╌%.0s' $(seq 1 "$sep_width"))"
-
-    # Cluster-wide accumulators
-    local cl_util=0 cl_mem_used=0 cl_mem_total=0 cl_pwr=0 cl_pwr_limit=0
-    local cl_gpu_count=0 cl_node_count=0
+    printf "${BOLD}${CYAN}  %-30s${RESET}\n" "Cluster Overview \u2014 all nodes"
+    printf "${DIM}%s${RESET}\n" "$(printf '\u2500%.0s' $(seq 1 "$sep_width"))"
 
     mapfile -t all_nodes <<< "${JOB_NODES[$jid]}"
     mapfile -t all_nodes < <(printf '%s\n' "${all_nodes[@]}" | grep -v '^[[:space:]]*$')
+
+    # ── Pass 1: collect per-node data + determine max column widths ────────────
+    local -a P_NODE=() P_GPU=() P_UTIL=() P_MU=() P_MT=() P_PD=() P_PL=() P_AGE=()
+    local max_gpu=0 max_mem=0 max_pwr=0
 
     for node in "${all_nodes[@]}"; do
         [[ -z "$node" ]] && continue
@@ -370,12 +364,10 @@ render_overview() {
         local cf; cf=$(cache_file "$node")
         local raw_gpu=''
         if [[ -f "$cf" ]]; then
-            local content; content=$(cat "$cf")
-            raw_gpu="${content%%---PROCS---*}"
-            raw_gpu="${raw_gpu%$'\n'}"
+            local _c; _c=$(cat "$cf")
+            raw_gpu="${_c%%---PROCS---*}"; raw_gpu="${raw_gpu%$'\n'}"
         fi
 
-        # Staleness marker
         local age_label=''
         local af; af=$(age_file "$node")
         if [[ -f "$af" ]]; then
@@ -384,77 +376,105 @@ render_overview() {
             (( age > FETCH_INTERVAL * 3 )) && age_label=" ${YELLOW}[stale ${age}s]${RESET}"
         fi
 
-        # Per-node accumulators
-        local n_util=0 n_mem_used=0 n_mem_total=0 n_pwr=0 n_pwr_limit=0 n_gpu=0
-
+        local n_gpu=0 n_util=0 n_mu=0 n_mt=0 n_pd=0 n_pl=0
         if [[ -n "$raw_gpu" ]]; then
-            while IFS=',' read -r idx name util mem_used mem_total temp \
-                                    pwr_draw pwr_limit clk_sm clk_mem \
-                                    thr_therm thr_pwr ecc_unc; do
-                util=$(trim "$util"); mem_used=$(trim "$mem_used")
-                mem_total=$(trim "$mem_total")
-                pwr_draw=$(trim "$pwr_draw"); pwr_limit=$(trim "$pwr_limit")
-                pwr_draw=${pwr_draw%%.*}; pwr_limit=${pwr_limit%%.*}
+            while IFS=',' read -r idx name util mu mt temp pd pl clk_sm clk_mem thr_t thr_p ecc; do
+                util=$(trim "$util"); mu=$(trim "$mu"); mt=$(trim "$mt")
+                pd=$(trim "$pd"); pl=$(trim "$pl")
+                pd=${pd%%.*}; pl=${pl%%.*}
                 [[ "$util" =~ ^[0-9]+$ ]] || continue
-                (( n_util      += util      ))
-                (( n_mem_used  += mem_used  ))
-                (( n_mem_total += mem_total ))
-                (( n_pwr       += pwr_draw  ))
-                (( n_pwr_limit += pwr_limit ))
-                (( n_gpu++ ))
+                (( n_util += util )); (( n_mu += mu )); (( n_mt += mt ))
+                (( n_pd   += pd   )); (( n_pl += pl )); (( n_gpu++ ))
             done <<< "$raw_gpu"
         fi
 
-        (( cl_node_count++ ))
+        P_NODE+=("$node"); P_GPU+=("$n_gpu");  P_UTIL+=("$n_util")
+        P_MU+=("$n_mu");   P_MT+=("$n_mt");    P_PD+=("$n_pd")
+        P_PL+=("$n_pl");   P_AGE+=("$age_label")
+
+        # Track maximums for dynamic width calculation
+        (( n_gpu > max_gpu )) && max_gpu=$n_gpu
+        (( n_mt  > max_mem )) && max_mem=$n_mt
+        (( n_pl  > max_pwr )) && max_pwr=$n_pl
+    done
+
+    # Cluster-wide totals — factor them into max widths too (SUM row can be wider)
+    local cl_gpu=0 cl_util=0 cl_mu=0 cl_mt=0 cl_pd=0 cl_pl=0
+    local n_nodes=${#P_NODE[@]}
+    for (( i=0; i<n_nodes; i++ )); do
+        (( cl_gpu  += P_GPU[$i]  )); (( cl_util += P_UTIL[$i] ))
+        (( cl_mu   += P_MU[$i]  )); (( cl_mt   += P_MT[$i]   ))
+        (( cl_pd   += P_PD[$i]  )); (( cl_pl   += P_PL[$i]   ))
+    done
+    (( cl_gpu > max_gpu )) && max_gpu=$cl_gpu
+    (( cl_mt  > max_mem )) && max_mem=$cl_mt
+    (( cl_pl  > max_pwr )) && max_pwr=$cl_pl
+
+    # Compute digit-widths from the largest values (with sensible minimums)
+    #   w_gpu : digits for GPU counts     (min 2,  e.g. "8 " or "128")
+    #   w_mem : digits for MiB values     (min 6,  e.g. "143771" or "14377100")
+    #   w_pwr : digits for Watt values    (min 3,  e.g. "700" or "560000")
+    local w_gpu=${#max_gpu}; (( w_gpu < 2 )) && w_gpu=2
+    local w_mem=${#max_mem}; (( w_mem < 6 )) && w_mem=6
+    local w_pwr=${#max_pwr}; (( w_pwr < 3 )) && w_pwr=3
+
+    # Total visible chars per column section:
+    #   GPU   : "%{w_gpu}d GPU"           → w_gpu+4
+    #   Util% : " %3d%%"                  → 4  (util is always 0-100)
+    #   Mem   : "%{w_mem}d/%-{w_mem}d"   → 2*w_mem+1
+    #   Power : "%{w_pwr}d/%-{w_pwr}dW"  → 2*w_pwr+2
+    local c_gpu=$(( w_gpu + 4 ))
+    local c_mem=$(( 2*w_mem + 1 ))
+
+    # ── Column header — widths mirror the data format exactly ──────────────────
+    printf "  ${BOLD}%-22s  %-${c_gpu}s  %-${bw}s %-4s  %-${bw}s %-${c_mem}s  %s${RESET}\n" \
+           "Node" "GPUs" "Utilization" "%" "Memory" "Used/Tot MiB" "Power"
+    printf "  ${DIM}%s${RESET}\n" "$(printf '\u254c%.0s' $(seq 1 "$sep_width"))"
+
+    # ── Pass 2: render one row per node ───────────────────────────────────────
+    for (( i=0; i<n_nodes; i++ )); do
+        local node="${P_NODE[$i]}" n_gpu="${P_GPU[$i]}"
 
         if (( n_gpu == 0 )); then
-            printf "  ${BOLD}%-22.22s${RESET}  ${DIM}%-6s${RESET}  ${DIM}Waiting for data…${RESET}%b\n" \
-                   "$node" "–" "$age_label"
+            printf "  ${BOLD}%-22.22s${RESET}  ${DIM}%-${c_gpu}s${RESET}  ${DIM}Waiting for data\u2026${RESET}%b\n" \
+                   "$node" "\u2013" "${P_AGE[$i]}"
             continue
         fi
 
-        local avg_util=$(( n_util / n_gpu ))
+        local avg_util=$(( P_UTIL[$i] / n_gpu ))
         local mem_pct=0 pwr_pct=0
-        (( n_mem_total > 0 )) && mem_pct=$(( n_mem_used * 100 / n_mem_total ))
-        (( n_pwr_limit > 0 )) && pwr_pct=$(( n_pwr    * 100 / n_pwr_limit  ))
+        (( P_MT[$i] > 0 )) && mem_pct=$(( P_MU[$i] * 100 / P_MT[$i] ))
+        (( P_PL[$i] > 0 )) && pwr_pct=$(( P_PD[$i] * 100 / P_PL[$i] ))
 
         local uc mc pc
         uc=$(get_color "$avg_util"); mc=$(get_color "$mem_pct"); pc=$(get_color "$pwr_pct")
 
-        printf "  ${BOLD}%-22.22s${RESET}  ${DIM}%3d GPU${RESET}  " "$node" "$n_gpu"
-        draw_bar "$avg_util" "$bw";  printf " ${uc}%3d%%${RESET}  " "$avg_util"
-        draw_bar "$mem_pct"  "$bw";  printf " ${mc}%6d${RESET}/%-6d  " "$n_mem_used" "$n_mem_total"
-        printf "${pc}%3d${RESET}/%-3dW%b\n" "$n_pwr" "$n_pwr_limit" "$age_label"
-
-        # Accumulate cluster totals
-        (( cl_util      += n_util      ))
-        (( cl_mem_used  += n_mem_used  ))
-        (( cl_mem_total += n_mem_total ))
-        (( cl_pwr       += n_pwr       ))
-        (( cl_pwr_limit += n_pwr_limit ))
-        (( cl_gpu_count += n_gpu       ))
+        printf "  ${BOLD}%-22.22s${RESET}  ${DIM}%${w_gpu}d GPU${RESET}  " "$node" "$n_gpu"
+        draw_bar "$avg_util" "$bw"; printf " ${uc}%3d%%${RESET}  " "$avg_util"
+        draw_bar "$mem_pct"  "$bw"; printf " ${mc}%${w_mem}d${RESET}/%-${w_mem}d  " "${P_MU[$i]}" "${P_MT[$i]}"
+        printf "${pc}%${w_pwr}d${RESET}/%-${w_pwr}dW%b\n" "${P_PD[$i]}" "${P_PL[$i]}" "${P_AGE[$i]}"
     done
 
-    # ── Cluster SUM ───────────────────────────────────────────────────────────
-    printf "  ${DIM}%s${RESET}\n" "$(printf '╌%.0s' $(seq 1 "$sep_width"))"
-    if (( cl_gpu_count == 0 )); then
+    # ── Cluster SUM row ────────────────────────────────────────────────────────
+    printf "  ${DIM}%s${RESET}\n" "$(printf '\u254c%.0s' $(seq 1 "$sep_width"))"
+    if (( cl_gpu == 0 )); then
         printf "  ${DIM}CLUSTER SUM  (no data yet)${RESET}\n"
         return
     fi
 
-    local cl_avg_util=$(( cl_util / cl_gpu_count ))
+    local cl_avg_util=$(( cl_util / cl_gpu ))
     local cl_mem_pct=0 cl_pwr_pct=0
-    (( cl_mem_total > 0 )) && cl_mem_pct=$(( cl_mem_used * 100 / cl_mem_total ))
-    (( cl_pwr_limit > 0 )) && cl_pwr_pct=$(( cl_pwr     * 100 / cl_pwr_limit ))
+    (( cl_mt > 0 )) && cl_mem_pct=$(( cl_mu * 100 / cl_mt ))
+    (( cl_pl > 0 )) && cl_pwr_pct=$(( cl_pd * 100 / cl_pl ))
 
     local uc mc pc
     uc=$(get_color "$cl_avg_util"); mc=$(get_color "$cl_mem_pct"); pc=$(get_color "$cl_pwr_pct")
 
-    printf "  ${BOLD}%-22s${RESET}  ${DIM}%3d GPU${RESET}  " \
-           "CLUSTER SUM (${cl_node_count} nodes)" "$cl_gpu_count"
-    draw_bar "$cl_avg_util" "$bw";  printf " ${uc}%3d%%${RESET}  " "$cl_avg_util"
-    draw_bar "$cl_mem_pct"  "$bw";  printf " ${mc}%6d${RESET}/%-6d  " "$cl_mem_used" "$cl_mem_total"
-    printf "${pc}%3d${RESET}/%-3dW\n" "$cl_pwr" "$cl_pwr_limit"
+    printf "  ${BOLD}%-22.22s${RESET}  ${DIM}%${w_gpu}d GPU${RESET}  " \
+           "CLUSTER SUM (${n_nodes} nodes)" "$cl_gpu"
+    draw_bar "$cl_avg_util" "$bw"; printf " ${uc}%3d%%${RESET}  " "$cl_avg_util"
+    draw_bar "$cl_mem_pct"  "$bw"; printf " ${mc}%${w_mem}d${RESET}/%-${w_mem}d  " "$cl_mu" "$cl_mt"
+    printf "${pc}%${w_pwr}d${RESET}/%-${w_pwr}dW\n" "$cl_pd" "$cl_pl"
 }
 
 render_proc_section() {
@@ -551,12 +571,10 @@ while true; do
 
     njobs=${#JOB_IDS[@]}
 
-    # Full clear on terminal resize OR view-mode switch (line widths differ between
-    # detail and overview, leaving stale characters at the right edge otherwise)
-    if (( TERM_RESIZED )) || (( VIEW_MODE != PREV_VIEW_MODE )); then
+    # On terminal resize, do a full clear to eliminate stale content
+    if (( TERM_RESIZED )); then
         tput clear
         TERM_RESIZED=0
-        PREV_VIEW_MODE=$VIEW_MODE
     fi
 
     if (( njobs == 0 )); then
@@ -591,7 +609,11 @@ while true; do
                     $(( nidx+1 )) "$ncount" $(( job_idx+1 )) "$njobs" "$jid" "$jname")
         fi
         tput cup 0 0
-        printf '%b' "$frame"
+        # Pipe through sed to append \033[K (erase-to-end-of-line) on every line.
+        # This clears any stale right-edge characters left from a wider previous
+        # frame (e.g. switching between detail and overview views) without ever
+        # blanking the whole screen, so there is no visible flicker.
+        printf '%b' "$frame" | sed $'s/$/\033[K/'
         tput ed
     fi
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-03-06
+
+### Fixed
+
+- **Overview column misalignment**: the column header used hardcoded widths
+  (`%-6s` for GPUs, `%6d/%-6d` for MiB, `%3d/%-3dW` for watts) that did not
+  match actual data widths on larger clusters. The overview renderer now uses a
+  two-pass approach — pass 1 scans all cached nodes to find the maximum GPU
+  count, VRAM total, and power limit; pass 2 renders header and data rows with
+  digit-widths derived from those maximums so all columns are always perfectly
+  aligned regardless of cluster size.
+- **Overview mode flicker/blink on view switch**: the previous fix used
+  `tput clear` when switching between node-detail and overview views, causing a
+  visible full-screen blank. Replaced with `\033[K` (erase-to-end-of-line)
+  appended to every rendered line via `sed`, so stale right-edge characters are
+  cleared inline each frame without blanking the screen.
+
 ## [0.1.3] — 2026-03-06
 
 ### Added
@@ -60,7 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python package wrapper for `pip install nvnodetop` distribution
 - GitHub Actions CI/CD pipeline for automated PyPI publishing
 
-[Unreleased]: https://github.com/whats2000/nvnodetop/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/whats2000/nvnodetop/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/whats2000/nvnodetop/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/whats2000/nvnodetop/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/whats2000/nvnodetop/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/whats2000/nvnodetop/compare/v0.1.0...v0.1.1
