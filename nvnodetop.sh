@@ -378,7 +378,7 @@ render_overview() {
 
         local n_gpu=0 n_util=0 n_mu=0 n_mt=0 n_pd=0 n_pl=0
         if [[ -n "$raw_gpu" ]]; then
-            while IFS=',' read -r idx name util mu mt temp pd pl clk_sm clk_mem thr_t thr_p ecc; do
+            while IFS=',' read -r _idx _name util mu mt _temp pd pl _rest; do
                 util=$(trim "$util"); mu=$(trim "$mu"); mt=$(trim "$mt")
                 pd=$(trim "$pd"); pl=$(trim "$pl")
                 pd=${pd%%.*}; pl=${pl%%.*}
