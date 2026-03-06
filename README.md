@@ -12,6 +12,8 @@ Monitor every GPU across all your running jobs — with utilisation bars, sparkl
 
 ![nvnodetop screenshot](https://raw.githubusercontent.com/whats2000/nvnodetop/refs/heads/main/images/nvnodetop.png)
 
+![nvnodetop screenshot2](https://raw.githubusercontent.com/whats2000/nvnodetop/refs/heads/main/images/nvnodetop2.png)
+
 </div>
 
 ---
