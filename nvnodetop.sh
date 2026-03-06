@@ -228,7 +228,8 @@ stop_all_fetchers() {
 # ── State ─────────────────────────────────────────────────────────────────────
 last_node_refresh=0
 SHOW_PROCS=0
-VIEW_MODE=0   # 0 = node detail, 1 = cluster overview
+VIEW_MODE=0      # 0 = node detail, 1 = cluster overview
+PREV_VIEW_MODE=0 # detect mode switches → full clear to wipe stale line content
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
 render_gpu_section() {
@@ -550,10 +551,12 @@ while true; do
 
     njobs=${#JOB_IDS[@]}
 
-    # On terminal resize, do a full clear to eliminate stale content
-    if (( TERM_RESIZED )); then
+    # Full clear on terminal resize OR view-mode switch (line widths differ between
+    # detail and overview, leaving stale characters at the right edge otherwise)
+    if (( TERM_RESIZED )) || (( VIEW_MODE != PREV_VIEW_MODE )); then
         tput clear
         TERM_RESIZED=0
+        PREV_VIEW_MODE=$VIEW_MODE
     fi
 
     if (( njobs == 0 )); then
