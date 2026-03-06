@@ -228,6 +228,7 @@ stop_all_fetchers() {
 # ── State ─────────────────────────────────────────────────────────────────────
 last_node_refresh=0
 SHOW_PROCS=0
+VIEW_MODE=0   # 0 = node detail, 1 = cluster overview
 
 # ── Rendering ─────────────────────────────────────────────────────────────────
 render_gpu_section() {
@@ -327,6 +328,134 @@ render_gpu_section() {
     fi
 }
 
+# ── Overview: one SUM row per node + grand-total ──────────────────────────────
+# Reads the GPU-section summary accumulators from each cached node and prints
+# a compact table.  No per-GPU rows, no proc info — just totals.
+render_overview() {
+    local jid=$1 jname=$2 job_cur=$3 job_total=$4
+    local now; now=$(date '+%H:%M:%S')
+    local cols; cols=$(tput cols 2>/dev/null || echo 120)
+    local sep_width=$(( cols - 2 ))
+    (( sep_width < 20 )) && sep_width=20
+
+    local layout; layout=$(get_layout)
+    local bw=${layout%% *} rest=${layout#* }
+    local spark_len=${rest%% *}
+
+    # Header line
+    local proc_hint="${DIM}p procs${RESET}"
+    (( SHOW_PROCS )) && proc_hint="${BOLD}[p procs]${RESET}"
+    printf "${DIM}  Job ${RESET}${BOLD}%-8s${RESET} ${DIM}%-18s${RESET}" "$jid" "$jname"
+    printf "  ${DIM}job [%d/%d] ↑↓jobs  ${BOLD}[o overview]${RESET}${DIM}  q quit  poll:%ss disp:%ss  %s${RESET}\n" \
+           "$job_cur" "$job_total" "$FETCH_INTERVAL" "$DISPLAY_INTERVAL" "$now"
+    printf "${BOLD}${CYAN}  %-30s${RESET}\n" "Cluster Overview — all nodes"
+    printf "${DIM}%s${RESET}\n" "$(printf '─%.0s' $(seq 1 "$sep_width"))"
+
+    # Column header
+    printf "  ${BOLD}%-22s  %-6s  %-${bw}s %-4s  %-${bw}s %-13s  %-8s${RESET}\n" \
+           "Node" "GPUs" "Utilization" "%" "Memory" "Used/Tot MiB" "Power"
+    printf "  ${DIM}%s${RESET}\n" "$(printf '╌%.0s' $(seq 1 "$sep_width"))"
+
+    # Cluster-wide accumulators
+    local cl_util=0 cl_mem_used=0 cl_mem_total=0 cl_pwr=0 cl_pwr_limit=0
+    local cl_gpu_count=0 cl_node_count=0
+
+    mapfile -t all_nodes <<< "${JOB_NODES[$jid]}"
+    mapfile -t all_nodes < <(printf '%s\n' "${all_nodes[@]}" | grep -v '^[[:space:]]*$')
+
+    for node in "${all_nodes[@]}"; do
+        [[ -z "$node" ]] && continue
+
+        local cf; cf=$(cache_file "$node")
+        local raw_gpu=''
+        if [[ -f "$cf" ]]; then
+            local content; content=$(cat "$cf")
+            raw_gpu="${content%%---PROCS---*}"
+            raw_gpu="${raw_gpu%$'\n'}"
+        fi
+
+        # Staleness marker
+        local age_label=''
+        local af; af=$(age_file "$node")
+        if [[ -f "$af" ]]; then
+            local ts now_ts age
+            ts=$(cat "$af"); now_ts=$(date +%s); age=$(( now_ts - ts ))
+            (( age > FETCH_INTERVAL * 3 )) && age_label=" ${YELLOW}[stale ${age}s]${RESET}"
+        fi
+
+        # Per-node accumulators
+        local n_util=0 n_mem_used=0 n_mem_total=0 n_pwr=0 n_pwr_limit=0 n_gpu=0
+
+        if [[ -n "$raw_gpu" ]]; then
+            while IFS=',' read -r idx name util mem_used mem_total temp \
+                                    pwr_draw pwr_limit clk_sm clk_mem \
+                                    thr_therm thr_pwr ecc_unc; do
+                util=$(trim "$util"); mem_used=$(trim "$mem_used")
+                mem_total=$(trim "$mem_total")
+                pwr_draw=$(trim "$pwr_draw"); pwr_limit=$(trim "$pwr_limit")
+                pwr_draw=${pwr_draw%%.*}; pwr_limit=${pwr_limit%%.*}
+                [[ "$util" =~ ^[0-9]+$ ]] || continue
+                (( n_util      += util      ))
+                (( n_mem_used  += mem_used  ))
+                (( n_mem_total += mem_total ))
+                (( n_pwr       += pwr_draw  ))
+                (( n_pwr_limit += pwr_limit ))
+                (( n_gpu++ ))
+            done <<< "$raw_gpu"
+        fi
+
+        (( cl_node_count++ ))
+
+        if (( n_gpu == 0 )); then
+            printf "  ${BOLD}%-22.22s${RESET}  ${DIM}%-6s${RESET}  ${DIM}Waiting for data…${RESET}%b\n" \
+                   "$node" "–" "$age_label"
+            continue
+        fi
+
+        local avg_util=$(( n_util / n_gpu ))
+        local mem_pct=0 pwr_pct=0
+        (( n_mem_total > 0 )) && mem_pct=$(( n_mem_used * 100 / n_mem_total ))
+        (( n_pwr_limit > 0 )) && pwr_pct=$(( n_pwr    * 100 / n_pwr_limit  ))
+
+        local uc mc pc
+        uc=$(get_color "$avg_util"); mc=$(get_color "$mem_pct"); pc=$(get_color "$pwr_pct")
+
+        printf "  ${BOLD}%-22.22s${RESET}  ${DIM}%3d GPU${RESET}  " "$node" "$n_gpu"
+        draw_bar "$avg_util" "$bw";  printf " ${uc}%3d%%${RESET}  " "$avg_util"
+        draw_bar "$mem_pct"  "$bw";  printf " ${mc}%6d${RESET}/%-6d  " "$n_mem_used" "$n_mem_total"
+        printf "${pc}%3d${RESET}/%-3dW%b\n" "$n_pwr" "$n_pwr_limit" "$age_label"
+
+        # Accumulate cluster totals
+        (( cl_util      += n_util      ))
+        (( cl_mem_used  += n_mem_used  ))
+        (( cl_mem_total += n_mem_total ))
+        (( cl_pwr       += n_pwr       ))
+        (( cl_pwr_limit += n_pwr_limit ))
+        (( cl_gpu_count += n_gpu       ))
+    done
+
+    # ── Cluster SUM ───────────────────────────────────────────────────────────
+    printf "  ${DIM}%s${RESET}\n" "$(printf '╌%.0s' $(seq 1 "$sep_width"))"
+    if (( cl_gpu_count == 0 )); then
+        printf "  ${DIM}CLUSTER SUM  (no data yet)${RESET}\n"
+        return
+    fi
+
+    local cl_avg_util=$(( cl_util / cl_gpu_count ))
+    local cl_mem_pct=0 cl_pwr_pct=0
+    (( cl_mem_total > 0 )) && cl_mem_pct=$(( cl_mem_used * 100 / cl_mem_total ))
+    (( cl_pwr_limit > 0 )) && cl_pwr_pct=$(( cl_pwr     * 100 / cl_pwr_limit ))
+
+    local uc mc pc
+    uc=$(get_color "$cl_avg_util"); mc=$(get_color "$cl_mem_pct"); pc=$(get_color "$cl_pwr_pct")
+
+    printf "  ${BOLD}%-22s${RESET}  ${DIM}%3d GPU${RESET}  " \
+           "CLUSTER SUM (${cl_node_count} nodes)" "$cl_gpu_count"
+    draw_bar "$cl_avg_util" "$bw";  printf " ${uc}%3d%%${RESET}  " "$cl_avg_util"
+    draw_bar "$cl_mem_pct"  "$bw";  printf " ${mc}%6d${RESET}/%-6d  " "$cl_mem_used" "$cl_mem_total"
+    printf "${pc}%3d${RESET}/%-3dW\n" "$cl_pwr" "$cl_pwr_limit"
+}
+
 render_proc_section() {
     local raw_procs=$1
     local cols; cols=$(tput cols 2>/dev/null || echo 120)
@@ -375,7 +504,7 @@ render_node() {
     (( SHOW_PROCS )) && proc_hint="${BOLD}[p procs]${RESET}"
 
     printf "${DIM}  Job ${RESET}${BOLD}%-8s${RESET} ${DIM}%-18s${RESET}" "$jid" "$jname"
-    printf "  ${DIM}job [%d/%d] ↑↓jobs  node [%d/%d] <>nodes  %b  q quit  poll:%ss disp:%ss  %s${RESET}\n" \
+    printf "  ${DIM}job [%d/%d] ↑↓jobs  node [%d/%d] <>nodes  %b  o overview  q quit  poll:%ss disp:%ss  %s${RESET}\n" \
            "$job_cur" "$job_total" "$node_cur" "$node_total" "$proc_hint" "$FETCH_INTERVAL" "$DISPLAY_INTERVAL" "$now"
     local cols; cols=$(tput cols 2>/dev/null || echo 120)
     local sep_width=$(( cols - 2 ))
@@ -447,11 +576,17 @@ while true; do
 
         node="${cur_nodes[$nidx]}"
 
-        # Update sparkline history from latest cache (must run outside subshell)
-        update_history "$node"
+        # Update sparkline history for all nodes in this job
+        for _n in "${cur_nodes[@]}"; do
+            [[ -n "$_n" ]] && update_history "$_n"
+        done
 
-        frame=$(render_node "$node" \
-                $(( nidx+1 )) "$ncount" $(( job_idx+1 )) "$njobs" "$jid" "$jname")
+        if (( VIEW_MODE == 1 )); then
+            frame=$(render_overview "$jid" "$jname" $(( job_idx+1 )) "$njobs")
+        else
+            frame=$(render_node "$node" \
+                    $(( nidx+1 )) "$ncount" $(( job_idx+1 )) "$njobs" "$jid" "$jname")
+        fi
         tput cup 0 0
         printf '%b' "$frame"
         tput ed
@@ -478,6 +613,7 @@ while true; do
         $'\x1b[A'|'k'|'K' )   (( njobs > 0 )) && job_idx=$(( (job_idx - 1 + njobs) % njobs )) ;;
         $'\x1b[B'|'j'|'J' )   (( njobs > 0 )) && job_idx=$(( (job_idx + 1) % njobs )) ;;
         'p'|'P' )              (( SHOW_PROCS = !SHOW_PROCS )) ;;
+        'o'|'O'|$'\t' )       (( VIEW_MODE = !VIEW_MODE )) ;;
         'q'|'Q' )              cleanup ;;
     esac
 done

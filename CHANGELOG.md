@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-03-06
+
+### Added
+
+- **Cluster overview page**: press `o` / `O` (or `Tab`) to switch between the
+  per-node detail view and a new full-cluster summary table
+- Overview table shows one row per node with average GPU utilisation bar,
+  total VRAM used/total bar, and total power draw for that node
+- **CLUSTER SUM** row at the bottom aggregates every GPU across all nodes in
+  the current SLURM job (avg util, total VRAM, total power)
+- Stale or not-yet-loaded nodes are listed as `Waiting for data…` so they are
+  never silently dropped from the count
+- Sparkline history is now updated for **all** nodes in the job each refresh
+  cycle (not only the currently displayed node)
+- `o overview` keybinding hint added to the node-detail status bar
+
 ## [0.1.2] — 2026-02-27
 
 ### Fixed
@@ -44,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python package wrapper for `pip install nvnodetop` distribution
 - GitHub Actions CI/CD pipeline for automated PyPI publishing
 
-[Unreleased]: https://github.com/whats2000/nvnodetop/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/whats2000/nvnodetop/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/whats2000/nvnodetop/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/whats2000/nvnodetop/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/whats2000/nvnodetop/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/whats2000/nvnodetop/releases/tag/v0.1.0
